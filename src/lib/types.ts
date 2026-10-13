@@ -30,6 +30,8 @@ export interface AccountMeta {
   createdAt: number | null;
   needsRelogin: boolean;
   needsReloginReason: string | null;
+  /** 账号分组："desktop"=桌面端 / "proxy"=反代API / 缺失=未分组 */
+  group?: string | null;
   /** 账号所属档位；缺省（旧后端/历史账号）按国内版处理。 */
   variant?: WbVariant;
   /**
@@ -1050,4 +1052,130 @@ export interface VscodeSessionList {
    * 可选：旧后端不返回该字段时为 `undefined`，前端按旧文案处理。
    */
   dataRoot?: string | null;
+}
+
+// ------------------------------------------------------------------ API 反代
+
+/**
+ * 反代「版本」概念（domestic / international）的展示文案。
+ * 与账号的 variant（cn / ai）一一对应：cn=domestic、ai=international。
+ */
+export const EDITIONS = [
+  { value: "domestic", label: "国内版", processName: "WorkBuddy" },
+  { value: "international", label: "国际版", processName: "WorkBuddyAI" },
+] as const;
+
+export function editionLabel(edition?: string | null): string {
+  return edition === "international" ? "国际版" : "国内版";
+}
+
+/** 账号 variant → 反代版本（缺省按国内版处理）。 */
+export function accountEdition(a: { variant?: WbVariant | null }): "domestic" | "international" {
+  return a.variant === "ai" ? "international" : "domestic";
+}
+
+/** 账号分组的合法取值与展示文案。 */
+export const ACCOUNT_GROUPS = [
+  { value: "", label: "未分组" },
+  { value: "desktop", label: "桌面端" },
+  { value: "proxy", label: "反代API" },
+] as const;
+
+export function accountGroupLabel(group?: string | null): string {
+  if (group === "desktop") return "桌面端";
+  if (group === "proxy") return "反代API";
+  return "未分组";
+}
+
+/** 一个版本的接入点：开关、监听地址、API Key、账号名单全部独立。 */
+export interface ProxyEndpoint {
+  enabled: boolean;
+  /** `host:port`。 */
+  listen: string;
+  /** 留空 = 不鉴权（仅在监听 127.0.0.1 时才建议留空）。 */
+  api_key: string;
+  /** 参与**这个入口**反代的 uid；留空 = 该版本的全部账号。 */
+  accounts: string[];
+  /**
+   * **额外放行**的模型：上游列表里没有、但本入口实测可用的。
+   * 填进来的模型会并入本入口 `GET /v1/models`，并**跳过版本校验**。
+   */
+  extra_models: string[];
+}
+
+/** 反代配置：国内版与国际版各自一个独立入口，互不影响。 */
+export interface ProxyConfig {
+  /** 国内版入口（`.workbuddy` / www.codebuddy.cn）。 */
+  domestic: ProxyEndpoint;
+  /** 国际版入口（`.workbuddy-ai` / www.workbuddy.ai）。 */
+  international: ProxyEndpoint;
+}
+
+/** 某一个入口的运行状态。 */
+export interface ProxyEndpointStatus {
+  /** "domestic" | "international" */
+  edition: string;
+  label: string;
+  enabled: boolean;
+  listen: string;
+  hasApiKey: boolean;
+  /** 该入口的账号数（0 = 该版本的所有账号都参与）。 */
+  accountCount: number;
+  /** 是否正在监听该端口。 */
+  running: boolean;
+}
+
+export interface ProxyStatus {
+  /** 有没有**任何一个**入口在监听。 */
+  running: boolean;
+  endpoints: ProxyEndpointStatus[];
+}
+
+/** 一档（国内版 / 国际版）的模型列表。两版的模型不一样，所以分开看。 */
+export interface ProxyModelsEdition {
+  /** "domestic" | "international" */
+  edition: string;
+  label: string;
+  models: string[];
+  source: string;
+  sourceUrl: string;
+  /** 这一档没拉到时的原因；拉到则为 null。 */
+  error: string | null;
+}
+
+export interface ProxyModels {
+  /** 分档明细（拉的是哪一档就有几条）。 */
+  editions: ProxyModelsEdition[];
+  /** 扁平并集，兼容旧用法。 */
+  models: string[];
+  source: string;
+  sourceUrl: string;
+}
+
+export interface UsageBucket {
+  requests?: number;
+  errors?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  credit?: number;
+  nickname?: string;
+}
+
+/** 反代累计用量：总计 + 按账号 + 按模型 + 最近请求。 */
+export interface ProxyUsage {
+  updatedAt?: number;
+  total: UsageBucket;
+  byAccount: Record<string, UsageBucket>;
+  byModel: Record<string, UsageBucket>;
+  recent: Array<{
+    ts: number;
+    uid: string;
+    nickname?: string;
+    model: string;
+    stream: boolean;
+    ok: boolean;
+    promptTokens: number;
+    completionTokens: number;
+    credit?: number;
+  }>;
 }

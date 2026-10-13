@@ -57,6 +57,9 @@ pub(crate) fn notify_codebuddy_cli_updated(app: &tauri::AppHandle) {
 /// 签到时间段时固定 30 分钟）；自动轮换每 30 秒检查；每天一次保活；
 /// 限额 hook 信号每秒轮询一次（入账即通知前端）；限额 hook 启动时后台默认接入。
 fn spawn_background_loops(app: tauri::AppHandle) {
+    // OpenAI 兼容反代：proxy.json 里 enabled=true 时才监听（默认关闭）。
+    wb_switch_core::modules::proxy::spawn_from_config();
+
     let rotate_app = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(error) = modules::config::compact_checkin_logs() {
@@ -304,6 +307,13 @@ pub fn run() {
             companion::get_companion_enabled,
             companion::set_companion_enabled,
             companion::open_companion_settings,
+            commands::get_proxy_config,
+            commands::save_proxy_config,
+            commands::get_proxy_status,
+            commands::set_account_group,
+            commands::get_proxy_usage,
+            commands::reset_proxy_usage,
+            commands::get_proxy_models,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

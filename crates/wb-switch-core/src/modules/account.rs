@@ -144,6 +144,8 @@ pub fn account_meta(acc: &Value) -> Value {
         "needsReloginReason": display_value(acc, "needs_relogin_reason"),
         // 企业版标记（issue #167）：读取时判定，供前端展示「企业版」徽标，历史数据零迁移。
         "isEnterprise": is_enterprise_account(acc),
+        // 账号分组："desktop"=桌面端 / "proxy"=反代API / 缺失=未分组（历史数据零迁移）。
+        "group": display_value(acc, "group"),
         // 档位随元数据下发，供宿主按档位过滤列表（缺省国内版，历史数据零迁移）。
         "variant": variant_of(acc).as_str(),
     })

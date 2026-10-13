@@ -10,8 +10,9 @@ use tauri::Emitter;
 use wb_switch_core::modules::{
     account, auth_file, checkin, codebuddy_cli, codebuddy_cn_ide, codebuddy_ide,
     codebuddy_ide_session, codebuddy_ide_session_sync, credit_usage, credits, error_log,
-    export_import, jetbrains, limits, notifications, oauth, process, rate_limit_events,
-    rate_limit_hook, refresh, rotate, session, session_groups, switch, token_stats, travel, update,
+    export_import, jetbrains, limits, notifications, oauth, process, proxy,
+    rate_limit_events, rate_limit_hook, refresh, rotate, session, session_groups, switch,
+    token_stats, travel, update, edition::{Edition, parse_lenient},
     variant::WbVariant, vscode_ext, vscode_session, vscode_session_sync,
 };
 
@@ -1465,4 +1466,118 @@ pub async fn list_notifications() -> Result<Value, String> {
 #[tauri::command]
 pub async fn clear_notifications() -> Result<(), String> {
     notifications::clear()
+}
+
+// ------------------------------------------------------------------ API 反代
+
+/// 读取反代配置（国内版 / 国际版双入口 + 账号白名单）。
+#[tauri::command]
+pub fn get_proxy_config() -> Result<Value, String> {
+    serde_json::to_value(proxy::load_proxy_config()).map_err(|e| e.to_string())
+}
+
+/// 保存反代配置并立即生效（启用/停用、改地址、改 key 都在这里完成）。
+///
+/// 返回**逐版本**的启动结果：某个入口起不来（最常见的是「那一版没有账号」）
+/// 不该让整个保存动作失败，更不该连累另一个入口。
+#[tauri::command]
+pub fn save_proxy_config(config: Value) -> Result<Value, String> {
+    let cfg: proxy::ProxyConfig =
+        serde_json::from_value(config).map_err(|e| format!("配置格式不正确：{e}"))?;
+    proxy::save_proxy_config(&cfg)?;
+    let outcomes: Vec<Value> = proxy::apply_config(&cfg)
+        .iter()
+        .map(|(edition, r)| {
+            json!({
+                "edition": edition.key(),
+                "label": edition.label(),
+                "ok": r.is_ok(),
+                "error": r.as_ref().err(),
+            })
+        })
+        .collect();
+    Ok(json!({ "ok": true, "running": proxy::proxy_running(), "endpoints": outcomes }))
+}
+
+/// 反代运行状态：哪几个入口在监听、各自生效的配置是什么。
+#[tauri::command]
+pub fn get_proxy_status() -> Value {
+    let cfg = proxy::load_proxy_config();
+    let endpoints: Vec<Value> = wb_switch_core::modules::edition::Edition::ALL
+        .iter()
+        .map(|&e| {
+            let ep = cfg.endpoint(e);
+            json!({
+                "edition": e.key(),
+                "label": e.label(),
+                "enabled": ep.enabled,
+                "listen": ep.listen,
+                "hasApiKey": !ep.api_key.trim().is_empty(),
+                // 该入口自己的账号数（0 = 该版本的所有账号都参与）
+                "accountCount": ep.accounts.len(),
+                "running": proxy::is_running(e),
+            })
+        })
+        .collect();
+    json!({
+        "running": proxy::proxy_running(),
+        "endpoints": endpoints,
+    })
+}
+
+/// 设置账号分组："desktop"=桌面端 / "proxy"=反代API / ""=未分组。
+#[tauri::command]
+pub fn set_account_group(account_id: String, group: String) -> Result<Value, String> {
+    let mut accounts = account::load_accounts();
+    let pos = accounts
+        .iter()
+        .position(|a| a.get("id").and_then(Value::as_str) == Some(account_id.as_str()))
+        .ok_or_else(|| "账号不存在".to_string())?;
+
+    let g = group.trim().to_string();
+    if !g.is_empty() && g != "desktop" && g != "proxy" {
+        return Err(format!("未知分组：{g}"));
+    }
+    if let Some(obj) = accounts[pos].as_object_mut() {
+        if g.is_empty() {
+            obj.remove("group");
+        } else {
+            obj.insert("group".to_string(), json!(g));
+        }
+    }
+    account::save_accounts(&accounts).map_err(|e| e.to_string())?;
+    Ok(json!({ "ok": true, "id": account_id, "group": g }))
+}
+
+/// 反代用量统计（即使服务没在跑也能读历史数据）。
+///
+/// 🔴 **必须按版本分开**：国内版入口只统计国内版的量，国际版入口只统计国际版的量。
+/// 不传 `edition` 时返回国内版（保持旧调用方可用），前端两个页面各自传自己的档。
+#[tauri::command]
+pub fn get_proxy_usage(edition: Option<String>) -> Value {
+    proxy::load_usage_for(parse_edition(edition.as_deref()))
+}
+
+/// 清空反代用量统计。不传 `edition` 时**两版都清**。
+#[tauri::command]
+pub fn reset_proxy_usage(edition: Option<String>) -> Result<Value, String> {
+    proxy::reset_usage(edition.as_deref().map(parse_lenient))?;
+    Ok(json!({ "ok": true }))
+}
+
+/// `"international"` / `"intl"` / `"ai"` → 国际版，其余（含 `None`、无法识别）→ 国内版。
+///
+/// 直接复用 `Edition::parse_lenient`，与反代其它地方同口径 —— 未知值一律回落国内版。
+fn parse_edition(edition: Option<&str>) -> Edition {
+    edition.map(parse_lenient).unwrap_or(Edition::Domestic)
+}
+
+/// 「获取模型ID」：先问本机反代（同一份数据、不额外占号），拿不到再直连上游。
+///
+/// async：要走两次可能很慢的网络请求（本地 HTTP + 上游），不能占主线程。
+#[tauri::command]
+pub async fn get_proxy_models(edition: Option<String>) -> Result<Value, String> {
+    // 不传 edition = 国内版 + 国际版各拉一次再分档返回，
+    // 传 "domestic" / "international" 只拉那一档。两版模型列表不一样，必须分开看。
+    proxy::fetch_models(edition).await
 }

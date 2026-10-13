@@ -59,7 +59,7 @@ import {
   variantUsesIntlCodebuddyIde,
 } from "@/lib/variant";
 import { useSupportedTools } from "@/lib/supported-tools";
-import type { AccountMeta, AppStatus, CheckinConfig, CreditExpiry, RateLimitEntry, TravelConfig, TravelStatus } from "@/lib/types";
+import { accountGroupLabel, type AccountMeta, type AppStatus, type CheckinConfig, type CreditExpiry, type RateLimitEntry, type TravelConfig, type TravelStatus } from "@/lib/types";
 import { displayName } from "@/lib/account-display";
 import { cn } from "@/lib/utils";
 import { useAccountsStore } from "@/stores/accounts";
@@ -181,6 +181,7 @@ export default function AccountsPage() {
     refreshCredits,
     clientStatus,
     setClientStatus,
+    setAccountGroupLocal,
   } = useAccountsStore();
   const [oauthOpen, setOauthOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -628,6 +629,19 @@ export default function AccountsPage() {
       if (res.result !== "error") void refreshCredits([a.id]);
     } catch (e) {
       toast.error("签到失败", { description: api.asError(e) });
+    }
+  }
+
+  /** 设置账号分组（桌面端 / 反代API / 未分组）。 */
+  async function onSetGroup(a: AccountMeta, group: string) {
+    try {
+      await api.setAccountGroup(a.id, group);
+      setAccountGroupLocal(a.id, group);
+      toast.success("分组已更新", {
+        description: `${displayName(a)} → ${accountGroupLabel(group)}`,
+      });
+    } catch (e) {
+      toast.error("分组设置失败", { description: api.asError(e) });
     }
   }
 
@@ -1096,6 +1110,7 @@ export default function AccountsPage() {
                 onDelete={onDelete}
                 onSwitch={setSwitchAccount}
                 onShowInfo={setInfoTarget}
+                onSetGroup={onSetGroup}
                 onCheckin={checkinAvailable ? onCheckin : undefined}
                 onRefresh={onRefresh}
                 todayCheckedIn={checkinMap[a.id]}

@@ -51,6 +51,10 @@ import type {
   VscodeSessionList,
   VscodeSessionRef,
   WbVariant,
+  ProxyConfig,
+  ProxyModels,
+  ProxyStatus,
+  ProxyUsage,
 } from "./types";
 import { DEMO_UNAVAILABLE_MESSAGE, demoModeEnabled } from "./demo-mode";
 import { screenshotDemoResponse } from "./screenshot-demo";
@@ -1134,4 +1138,56 @@ export function getErrorLogPath(): Promise<string> {
 export function revealErrorLog(): Promise<void> {
   if (demoModeEnabled || isWebui()) return Promise.resolve();
   return call<unknown>("reveal_error_log").then(() => undefined);
+}
+
+// ------------------------------------------------------------------ API 反代
+
+export function getProxyConfig(): Promise<ProxyConfig> {
+  return call("get_proxy_config");
+}
+
+export function saveProxyConfig(config: ProxyConfig): Promise<{
+  ok: boolean;
+  running: boolean;
+  /** 逐入口的启动结果：某个入口起不来不应让整体失败。 */
+  endpoints: Array<{ edition: string; label: string; ok: boolean; error: string | null }>;
+}> {
+  return call("save_proxy_config", { config: config as unknown as Record<string, unknown> });
+}
+
+export function getProxyStatus(): Promise<ProxyStatus> {
+  return call("get_proxy_status");
+}
+
+/**
+ * 反代用量统计（服务没跑也能读历史）。
+ *
+ * 🔴 **必须按版本分开**：国内版入口只统计经 7863 的请求，国际版只统计经 7864 的。
+ * 两个页面各自传自己的 `edition`（缓存键含参数，两页不会互相串数据）。
+ */
+export function getProxyUsage(edition?: "domestic" | "international"): Promise<ProxyUsage> {
+  return call("get_proxy_usage", { edition });
+}
+
+/** 清空反代用量统计。传 `edition` 只清那一版；不传则两版都清。 */
+export function resetProxyUsage(edition?: "domestic" | "international"): Promise<{ ok: boolean }> {
+  return call("reset_proxy_usage", { edition });
+}
+
+/**
+ * 拉可用模型列表。
+ *
+ * 不传 `edition` = 国内版和国际版各拉一次、分档返回（两版模型列表本来就不一样）；
+ * 传 `"domestic"` / `"international"` 只拉那一档。
+ */
+export function getProxyModels(edition?: string): Promise<ProxyModels> {
+  return call("get_proxy_models", { edition });
+}
+
+/** 设置账号分组："desktop"=桌面端 / "proxy"=反代API / ""=未分组。 */
+export function setAccountGroup(
+  accountId: string,
+  group: string,
+): Promise<{ ok: boolean; id: string; group: string }> {
+  return call("set_account_group", { accountId, group });
 }

@@ -8,6 +8,8 @@ pub mod codebuddy_ide_session;
 pub mod codebuddy_ide_session_sync;
 pub mod config;
 pub mod credit_usage;
+pub mod edition;
+pub mod proxy;
 pub mod credits;
 pub mod error_log;
 pub mod export_import;

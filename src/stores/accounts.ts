@@ -79,6 +79,8 @@ interface AccountsState {
   fetchAll: () => Promise<void>;
   refreshStatus: (signal?: AbortSignal) => Promise<void>;
   deleteAccount: (id: string) => Promise<void>;
+  /** 本地就地更新账号分组（不重新拉列表，避免整页 loading）。 */
+  setAccountGroupLocal: (id: string, group: string) => void;
   /** Fetch credits only for ids not already cached. */
   ensureCredits: (accountIds: string[]) => Promise<void>;
   /** Force-refresh credits. `silent` skips toolbar/card loading flicker (timer). */
@@ -134,6 +136,13 @@ export const useAccountsStore = create<AccountsState>((set, get) => ({
     } catch {
       // 后台探测失败时保留最后一次成功状态，下一轮轮询继续尝试。
     }
+  },
+
+  /** 本地就地更新账号分组；不发请求、不触发整页 loading。 */
+  setAccountGroupLocal(id: string, group: string) {
+    set((s) => ({
+      accounts: s.accounts.map((a) => (a.id === id ? { ...a, group } : a)),
+    }));
   },
 
   async deleteAccount(id: string) {

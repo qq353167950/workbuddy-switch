@@ -20,7 +20,7 @@ import { accountIdentity, displayName } from "@/lib/account-display";
 import { avatarTone } from "@/lib/avatar-tone";
 import { creditResourceName } from "@/lib/credit-package-names";
 import { demoModeEnabled } from "@/lib/demo-mode";
-import type { AccountMeta, CreditExpiry, CreditResource, RateLimitEntry, TravelStatus } from "@/lib/types";
+import { accountGroupLabel, type AccountMeta, type CreditExpiry, type CreditResource, type RateLimitEntry, type TravelStatus } from "@/lib/types";
 
 function formatCredits(value: number): string {
   if (!Number.isFinite(value)) return "—";
@@ -265,6 +265,8 @@ interface Props {
   onRefresh?: (a: AccountMeta) => void;
   /** 打开「账号信息」弹框（查看信息、编辑备注、选择显示字段）。 */
   onShowInfo?: (a: AccountMeta) => void;
+  /** 设置账号分组（桌面端 / 反代API / 未分组）。 */
+  onSetGroup?: (a: AccountMeta, group: string) => void;
   onSwitch?: (a: AccountMeta) => void;
   todayCheckedIn?: boolean;
   /** 单账号参与许可，独立于全局开关；undefined 表示配置尚未加载。 */
@@ -409,7 +411,7 @@ function CreditResourceRow({ resource, compact, placeholderLabel }: { resource?:
   );
 }
 
-export function AccountCard({ account, onDelete, onCheckin, onRefresh, onShowInfo, onSwitch, todayCheckedIn, autoCheckinAllowed, travelStatus, rateLimits, credit, creditLoading, creditUpdatedAt, creditPriority, workbuddyActive, codebuddyCliConfigured, codebuddyCliActive, codebuddyCliBusy, onSwitchCodebuddyCli, codebuddyCliLoading, codebuddyCnIdeAvailable, codebuddyCnIdeActive, codebuddyCnIdeBusy, codebuddyCnIdeLoading, onSwitchCodebuddyCnIde, vscodeExtInstalled, vscodeExtExtensionInstalled, vscodeExtAvailable, vscodeExtActive, vscodeExtBusy, vscodeExtLoading, onSwitchVscodeExt, jetbrainsInstalled, jetbrainsPluginInstalled, jetbrainsAvailable, jetbrainsActive, jetbrainsBusy, jetbrainsLoading, onSwitchJetbrains, enabledTools, featuresDisabled = true, compact = false }: Props) {
+export function AccountCard({ account, onDelete, onCheckin, onRefresh, onShowInfo, onSetGroup, onSwitch, todayCheckedIn, autoCheckinAllowed, travelStatus, rateLimits, credit, creditLoading, creditUpdatedAt, creditPriority, workbuddyActive, codebuddyCliConfigured, codebuddyCliActive, codebuddyCliBusy, onSwitchCodebuddyCli, codebuddyCliLoading, codebuddyCnIdeAvailable, codebuddyCnIdeActive, codebuddyCnIdeBusy, codebuddyCnIdeLoading, onSwitchCodebuddyCnIde, vscodeExtInstalled, vscodeExtExtensionInstalled, vscodeExtAvailable, vscodeExtActive, vscodeExtBusy, vscodeExtLoading, onSwitchVscodeExt, jetbrainsInstalled, jetbrainsPluginInstalled, jetbrainsAvailable, jetbrainsActive, jetbrainsBusy, jetbrainsLoading, onSwitchJetbrains, enabledTools, featuresDisabled = true, compact = false }: Props) {
   /** 支持工具开关：关闭的端整块不渲染（缺省视为开启）。 */
   const toolEnabled = (id: ToolId) => enabledTools?.[id] !== false;
   const [resourcesOpen, setResourcesOpen] = useState(false);
@@ -447,6 +449,15 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onShowInf
       {/* 企业版标注（issue #167）：身份属性优先于状态 chip。
           紧凑卡片单行头部放不下（会挤掉账号名），徽标改在积分区显示。 */}
       {!compact && account.isEnterprise && <Badge variant="secondary" className={chipClass}>企业版</Badge>}
+      {/* 账号分组徽章（桌面端 / 反代API），反代页按分组筛选账号。 */}
+      {!compact && (account.group === "desktop" || account.group === "proxy") && (
+        <Badge
+          variant="secondary"
+          className={cn(chipClass, account.group === "proxy" ? "bg-sky-100 text-sky-800" : "bg-violet-100 text-violet-800")}
+        >
+          {accountGroupLabel(account.group)}
+        </Badge>
+      )}
       {autoCheckinAllowed === false &&
         statusIconChip({
           icon: <CalendarOff className="size-3.5" />,
@@ -555,6 +566,16 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onShowInf
               <DropdownMenuItem disabled={featuresDisabled || !onShowInfo} onSelect={() => onShowInfo?.(account)}>
                 <Info />账号信息
               </DropdownMenuItem>
+              {!demoModeEnabled && onSetGroup && (
+                <>
+                  {(["", "desktop", "proxy"] as const).map((g) => (
+                    <DropdownMenuItem key={g || "ungrouped"} disabled={featuresDisabled} onSelect={() => onSetGroup(account, g)}>
+                      {(account.group ?? "") === g ? <Check /> : <span className="inline-block size-4" />}
+                      分组：{accountGroupLabel(g)}
+                    </DropdownMenuItem>
+                  ))}
+                </>
+              )}
               {!demoModeEnabled && onCheckin && todayCheckedIn !== true && (
                 <DropdownMenuItem disabled={featuresDisabled || !onCheckin} onSelect={() => onCheckin?.(account)}>
                   <CircleCheck />手动签到
