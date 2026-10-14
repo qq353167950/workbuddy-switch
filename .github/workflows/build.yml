@@ -195,6 +195,7 @@ jobs:
       # 仓库变量 PUBLISH_APP=false 时整段跳过：纯 npm/CLI 改动可只发 npm 不发桌面 App；
       # 恢复为 true 后重跑本工作流即可幂等补发（与 PUBLISH_NPM 对称）。
       - name: Build desktop app
+        id: desktop
         if: vars.PUBLISH_APP != 'false'
         shell: bash
         env:
@@ -202,6 +203,13 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           AGENT_COMPANION_TARGET: ${{ matrix.target }}
         run: |
+          # 是否有可用签名密钥：决定本平台是否产出并发布更新包。
+          if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            SIGNED=true
+          else
+            SIGNED=false
+          fi
+          echo "signed=$SIGNED" >> "$GITHUB_OUTPUT"
           VER="${GITHUB_REF_NAME#v}"
           if ! [[ "$VER" =~ ^[0-9] ]]; then
             VER=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
@@ -209,7 +217,16 @@ jobs:
           BUNDLE_ROOT="target/${{ matrix.target }}/release/bundle"
           # cargo cache 会保留旧 NSIS/DMG/AppImage；不清理就会把 0.1.17 一类产物带进 Release。
           rm -rf "$BUNDLE_ROOT"
-          npm run tauri -- build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+          # 更新签名密钥缺失时，tauri 会在打包末尾签更新包并报
+          # 「failed to decode secret key」，把本平台整个构建拖死。此时退回
+          # 「只出安装包、不签更新包」：加 --config 关掉 createUpdaterArtifacts，
+          # 让构建至少产出可下载的安装包；下游 manifest 步骤会按同一条件跳过。
+          TAURI_ARGS=(--target ${{ matrix.target }} --bundles ${{ matrix.bundles }})
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY 未配置：跳过更新包签名，仅产出安装包（本次不发布自动更新元数据）"
+            TAURI_ARGS+=(--config '{"bundle":{"createUpdaterArtifacts":false}}')
+          fi
+          npm run tauri -- build "${TAURI_ARGS[@]}"
           echo "bundle after build:"
           find "$BUNDLE_ROOT" -type f | sort || true
           if [ "${{ matrix.bundles }}" = "nsis" ]; then
@@ -232,7 +249,7 @@ jobs:
           fi
 
       - name: Generate updater manifest
-        if: matrix.update_arch != '' && vars.PUBLISH_APP != 'false'
+        if: matrix.update_arch != '' && vars.PUBLISH_APP != 'false' && steps.desktop.outputs.signed == 'true'
         shell: bash
         env:
           UPDATE_OS: ${{ matrix.update_os }}
