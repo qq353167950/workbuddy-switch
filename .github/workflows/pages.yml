@@ -39,6 +39,10 @@ jobs:
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
+        with:
+          # 仓库未启用 Pages 时该 action 默认 404 退出；enablement=true 让它
+          # （凭上面 pages: write 权限）自动启用，新仓库/重命名后无需手动开 Pages。
+          enablement: true
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
