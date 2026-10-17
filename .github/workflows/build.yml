@@ -2,6 +2,7 @@ name: build
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
@@ -19,7 +20,57 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  prepare-release:
+    name: Prepare version and tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Select release version
+        id: version
+        shell: bash
+        run: |
+          python scripts/test-release-version.py
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then
+            # Queued pushes may already have been included in a newer release.
+            git fetch origin main --tags
+            git checkout -B main origin/main
+            if git log -1 --format=%s | grep -q '^chore(release): v'; then
+              echo 'publish=true' >> "$GITHUB_OUTPUT"
+              VERSION=$(python -c 'import json; print(json.load(open("package.json"))["version"])')
+              echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            VERSION=$(python scripts/release-version.py)
+            TAG="v$VERSION"
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add package.json package-lock.json src-tauri npm crates Cargo.lock
+            git commit -m "chore(release): $TAG [skip ci]"
+            git tag "$TAG"
+            git push --atomic origin HEAD:main "refs/tags/$TAG"
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            echo 'publish=true' >> "$GITHUB_OUTPUT"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            echo 'publish=true' >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+            echo 'publish=false' >> "$GITHUB_OUTPUT"
+          fi
+
   select-matrix:
     name: Select platforms
     runs-on: ubuntu-latest
@@ -101,13 +152,15 @@ jobs:
 
   build:
     name: ${{ matrix.name }}
-    needs: select-matrix
+    needs: [select-matrix, prepare-release]
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.select-matrix.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-release.outputs.tag }}
 
       - uses: actions/setup-node@v4
         with:
@@ -171,17 +224,18 @@ jobs:
 
       # 打包本平台包并发布到 npm（CLI 二进制走 npm registry，Release 只留桌面 App）
       # 仅 tag 发布；手动触发（例如只打 Windows 试装包）不得 npm publish。
-      # 仓库变量 PUBLISH_NPM=false 时整段跳过：registry 维护/故障期间仍可把桌面 App 发出去，
-      # 恢复后把变量改回 true 重跑本工作流即可补发 npm（脚本幂等，Release 资产会覆盖）。
+      # npm 发布需要显式配置 PUBLISH_NPM=true 和 NPM_TOKEN。
+      # 默认只发布桌面安装包，fork 不需要上游 npm 包的发布权限。
       - name: Publish platform package
-        if: startsWith(github.ref, 'refs/tags/v') && vars.PUBLISH_NPM != 'false'
+        if: needs.prepare-release.outputs.publish == 'true' && vars.PUBLISH_NPM == 'true'
         shell: bash
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_TAG: ${{ needs.prepare-release.outputs.tag }}
         run: |
           PKG_DIR="npm/platform/workbuddy-switch-${{ matrix.platform_tag }}"
           # 用 tag 版本同步 platform 包版本（git 里的可能滞后）
-          VER="${GITHUB_REF_NAME#v}"
+          VER="${RELEASE_TAG#v}"
           perl -pi -e "s/\"version\": \"[0-9.]+\"/\"version\": \"$VER\"/" "$PKG_DIR/package.json"
           mkdir -p "$PKG_DIR/bin"
           SRC="target/${{ matrix.target }}/release/wb-switch"
@@ -202,6 +256,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           AGENT_COMPANION_TARGET: ${{ matrix.target }}
+          RELEASE_TAG: ${{ needs.prepare-release.outputs.tag }}
         run: |
           # 是否有可用签名密钥：决定本平台是否产出并发布更新包。
           if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
@@ -210,8 +265,8 @@ jobs:
             SIGNED=false
           fi
           echo "signed=$SIGNED" >> "$GITHUB_OUTPUT"
-          VER="${GITHUB_REF_NAME#v}"
-          if ! [[ "$VER" =~ ^[0-9] ]]; then
+          VER="${RELEASE_TAG#v}"
+          if ! [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             VER=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           fi
           BUNDLE_ROOT="target/${{ matrix.target }}/release/bundle"
@@ -252,13 +307,14 @@ jobs:
         if: matrix.update_arch != '' && vars.PUBLISH_APP != 'false' && steps.desktop.outputs.signed == 'true'
         shell: bash
         env:
+          RELEASE_TAG: ${{ needs.prepare-release.outputs.tag }}
           UPDATE_OS: ${{ matrix.update_os }}
           UPDATE_ARCH: ${{ matrix.update_arch }}
           UPDATE_ARCHIVE_NAME: ${{ matrix.update_archive_name }}
           BUNDLE_DIR: target/${{ matrix.target }}/release/bundle/${{ matrix.update_bundle }}
         run: |
-          VER="${GITHUB_REF_NAME#v}"
-          if ! [[ "$VER" =~ ^[0-9] ]]; then
+          VER="${RELEASE_TAG#v}"
+          if ! [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             VER=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           fi
           echo "updater bundle dir: $BUNDLE_DIR (version $VER)"
@@ -288,12 +344,12 @@ jobs:
               UPDATE_KEYS="linux-${UPDATE_ARCH}-appimage linux-${UPDATE_ARCH}" \
               UPDATE_ARCHIVE_NAME="workbuddy-switch-linux-${UPDATE_ARCH}.AppImage" \
               UPDATE_JSON_NAME="latest-linux-${UPDATE_ARCH}.json" \
-              BUNDLE_DIR="$LINUX_ROOT/appimage" sh scripts/gen-update-json.sh
+              BUNDLE_DIR="$LINUX_ROOT/appimage" sh scripts/gen-update-json.sh "${GITHUB_REPOSITORY%/*}" "${GITHUB_REPOSITORY#*/}"
             UPDATE_VERSION="$VER" UPDATE_OS=linux UPDATE_ARCH="$UPDATE_ARCH" UPDATE_BUNDLE=deb \
               UPDATE_KEYS="linux-${UPDATE_ARCH}-deb" \
               UPDATE_ARCHIVE_NAME="workbuddy-switch-linux-${UPDATE_ARCH}.deb" \
               UPDATE_JSON_NAME="latest-linux-deb-${UPDATE_ARCH}.json" \
-              BUNDLE_DIR="$LINUX_ROOT/deb" sh scripts/gen-update-json.sh
+              BUNDLE_DIR="$LINUX_ROOT/deb" sh scripts/gen-update-json.sh "${GITHUB_REPOSITORY%/*}" "${GITHUB_REPOSITORY#*/}"
             cp "$LINUX_ROOT/appimage/latest-linux-${UPDATE_ARCH}.json" dist-bin/
             cp "$LINUX_ROOT/deb/latest-linux-deb-${UPDATE_ARCH}.json" dist-bin/
             exit 0
@@ -318,7 +374,7 @@ jobs:
           if [ "$UPDATE_OS" = "windows" ]; then
             cmp -s "dist-bin/$UPDATE_ARCHIVE_NAME" "dist-bin/workbuddy-switch_${VER}_x64-setup.exe"
           fi
-          UPDATE_VERSION="$VER" sh scripts/gen-update-json.sh
+          UPDATE_VERSION="$VER" sh scripts/gen-update-json.sh "${GITHUB_REPOSITORY%/*}" "${GITHUB_REPOSITORY#*/}"
           MANIFEST="$BUNDLE_DIR/latest-${UPDATE_OS}-${UPDATE_ARCH}.json"
           test -f "$MANIFEST"
           cp "$MANIFEST" dist-bin/
@@ -333,11 +389,13 @@ jobs:
   # 所有平台包发布成功后，发布主包（optionalDependencies 引用平台包）
   publish-main:
     name: Publish npm main package
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v') && vars.PUBLISH_NPM != 'false'
+    needs: [build, prepare-release]
+    if: needs.prepare-release.outputs.publish == 'true' && vars.PUBLISH_NPM == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-release.outputs.tag }}
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -351,11 +409,13 @@ jobs:
 
   release:
     name: Publish release assets
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v') && vars.PUBLISH_APP != 'false'
+    needs: [build, prepare-release]
+    if: needs.prepare-release.outputs.publish == 'true' && vars.PUBLISH_APP != 'false'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-release.outputs.tag }}
 
       - uses: actions/download-artifact@v4
         with:
@@ -364,11 +424,20 @@ jobs:
 
       - name: Merge updater manifests
         env:
+          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           # 缺平台是静默故障（Linux 曾因此 18 个版本收不到更新），合并后强制校验键齐全
           REQUIRED_PLATFORMS: darwin-aarch64,darwin-x86_64,windows-x86_64-nsis,windows-x86_64,linux-x86_64,linux-x86_64-deb,linux-x86_64-appimage
-        run: python3 scripts/merge-update-manifests.py artifacts
+        run: |
+          if [ -n "$SIGNING_KEY" ]; then
+            python3 scripts/merge-update-manifests.py artifacts
+          else
+            echo 'No signing key: publishing installers without updater manifests.'
+          fi
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.prepare-release.outputs.tag }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
           files: artifacts/*

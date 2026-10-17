@@ -145,6 +145,19 @@ workbuddy-switch status       # 终端查看当前账号
 
 界面与桌面 App 一致，功能覆盖上方全部模块，但不提供会话悬浮窗（桌面版专属）。webui 模式下的 macOS 权限由启动服务的终端进程决定；若终端已授权完全磁盘访问则无需额外操作。
 
+## 自动打包发布
+
+推送到 `main` 后，`build` 工作流会自动同步版本、创建 `v版本号` tag，构建四个平台的安装包，并上传至[本仓库 Releases](https://github.com/qq353167950/workbuddy-switch/releases)。
+
+- 版本取根目录 `package.json` 与已有正式版本 tag 中的最大值，补丁号加一，例如 `0.1.62 → 0.1.63`；两者均无有效版本时从 `1.0.0` 开始。
+- 自动版本提交带 `[skip ci]`，不会循环触发；创建 tag 和打包发布在同一工作流完成，不依赖 tag 再次触发 Actions。
+- 默认仅发布桌面安装包。只有配置仓库变量 `PUBLISH_NPM=true` 和密钥 `NPM_TOKEN` 才发布 npm 包；`PUBLISH_APP=false` 可关闭桌面包发布。
+- 未配置 `TAURI_SIGNING_PRIVATE_KEY` 时仍发布安装包，但不生成自动更新清单。自动更新还需要正确配置签名密钥与客户端公钥。
+- 手动在分支上运行工作流只生成 Actions Artifacts 测试包；手动推送 `v*` tag 仍可发布 Release，但需先同步项目版本。
+- 工作流使用内置 `GITHUB_TOKEN`，不需要保存个人 Token。仓库规则须允许 Actions 写入 `main` 与 `v*` tag；受保护分支需单独配置许可。
+
+版本脚本测试：`python scripts/test-release-version.py`（Python 3.11+）。
+
 ## 致谢
 
 感谢 [Linux.do](https://linux.do) 社区。
