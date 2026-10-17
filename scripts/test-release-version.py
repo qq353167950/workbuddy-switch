@@ -21,7 +21,8 @@ class ReleaseVersionTests(unittest.TestCase):
         self.assertEqual(release.next_version("0.1.62", []), "0.1.63")
 
     def test_highest_stable_version_wins(self):
-        self.assertEqual(release.next_version("1.0.9", ["v1.0.10", "v2.0.0-beta", "other"]), "1.0.11")
+        self.assertEqual(release.next_version("1.0.9", ["v1.0.10", "v2.0.0-beta", "other"]), "2.0.1")
+        self.assertEqual(release.next_version("1.2.0-beta.1", []), "1.2.1")
         self.assertEqual(release.next_version("2.0.0", ["v1.9.99"]), "2.0.1")
 
     def test_sync_real_project_files(self):

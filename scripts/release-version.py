@@ -9,7 +9,7 @@ from pathlib import Path
 def next_version(current, tags):
     versions = []
     for value in [current, *tags]:
-        match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", value or "")
+        match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?", value or "")
         if match:
             versions.append(tuple(map(int, match.groups())))
     if not versions:

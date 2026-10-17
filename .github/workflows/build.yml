@@ -47,7 +47,7 @@ jobs:
             # Queued pushes may already have been included in a newer release.
             git fetch origin main --tags
             git checkout -B main origin/main
-            if git log -1 --format=%s | grep -q '^chore(release): v'; then
+            if git log -1 --format=%s | grep -q '^chore(release): v' && [ "$(git rev-parse HEAD^)" = "$GITHUB_SHA" ]; then
               echo 'publish=true' >> "$GITHUB_OUTPUT"
               VERSION=$(python -c 'import json; print(json.load(open("package.json"))["version"])')
               echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
