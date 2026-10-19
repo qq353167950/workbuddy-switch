@@ -33,7 +33,7 @@ use super::edition::{edition_of, Edition};
 use super::refresh::refresh_account_token;
 
 const CONFIG_FILE: &str = "proxy.json";
-const DEFAULT_CLIENT_VERSION: &str = "5.5.4";
+const DEFAULT_CLIENT_VERSION: &str = "5.8.4";
 const DEFAULT_CLI_VERSION: &str = "2.137.1";
 /// token 剩余有效期小于该值时先刷新再出站。
 const REFRESH_MARGIN_MS: i64 = 2 * 60 * 60 * 1000;
