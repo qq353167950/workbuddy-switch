@@ -624,8 +624,11 @@ fn chat_headers(acc: &Value) -> HashMap<String, String> {
     // 会话头族（一次对话轮复用同一个聚合主键）。
     let conv_req = hex_id();
     let msg = hex_id();
+    // 国际版上游要求会话主键头（实测缺失会影响对话请求）；国内版保持原样零回归。
+    if edition_of(acc) == Edition::International {
+        h.insert("X-Conversation-ID".into(), conv_req.clone());
+    }
     h.insert("X-Conversation-Request-ID".into(), conv_req.clone());
-    h.insert("X-Conversation-Message-ID".into(), msg.clone());
     h.insert("X-Request-ID".into(), msg.clone());
     h.insert("X-Root-Request-ID".into(), conv_req.clone());
     h.insert("X-Trace-ID".into(), conv_req.clone());
