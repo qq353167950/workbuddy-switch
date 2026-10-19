@@ -587,12 +587,19 @@ fn chat_headers(acc: &Value) -> HashMap<String, String> {
     );
     h.insert("X-Requested-With".into(), "XMLHttpRequest".into());
     let endpoint = upstream_endpoint(acc);
+    let is_intl = edition_of(acc) == Edition::International;
     h.insert("Origin".into(), endpoint.into());
     h.insert("Referer".into(), format!("{endpoint}/"));
+    // UA 平台段对齐官方客户端实测：国际版为 workbuddy-ai。
+    let product_segment = if is_intl {
+        "workbuddy-ai"
+    } else {
+        "WorkBuddy"
+    };
     h.insert(
         "User-Agent".into(),
         format!(
-            "WorkBuddy/{DEFAULT_CLIENT_VERSION} WorkBuddy/{DEFAULT_CLIENT_VERSION} CLI/{DEFAULT_CLI_VERSION}"
+            "{product_segment}/{DEFAULT_CLIENT_VERSION} {product_segment}/{DEFAULT_CLIENT_VERSION} CLI/{DEFAULT_CLI_VERSION}"
         ),
     );
     h.insert("X-CodeBuddy-Request".into(), "1".into());
@@ -623,21 +630,27 @@ fn chat_headers(acc: &Value) -> HashMap<String, String> {
     }
     // 用量归属：伪装成桌面端会话，避免上游统计里 client 为空。
     h.insert("X-Agent-Purpose".into(), "conversation".into());
+    h.insert("X-Agent-Intent".into(), "craft".into());
+    h.insert("X-Agent-Type".into(), "main".into());
     h.insert("X-IDE-Name".into(), "WorkBuddy".into());
     h.insert("X-IDE-Type".into(), "desktop".into());
-    h.insert("X-Product".into(), "WorkBuddy".into());
+    h.insert("X-Product".into(), "SaaS".into());
+    h.insert("X-Private-Data".into(), "true".into());
 
     // 会话头族（一次对话轮复用同一个聚合主键）。
     let conv_req = hex_id();
     let msg = hex_id();
-    // 国际版上游要求会话主键头（实测缺失会影响对话请求）；国内版保持原样零回归。
-    if edition_of(acc) == Edition::International {
-        h.insert("X-Conversation-ID".into(), conv_req.clone());
-    }
+    // 会话主键头必发，对齐官方客户端的带横线 UUID 形态。
+    h.insert("X-Conversation-ID".into(), uuid::Uuid::new_v4().to_string());
     h.insert("X-Conversation-Request-ID".into(), conv_req.clone());
     h.insert("X-Request-ID".into(), msg.clone());
     h.insert("X-Root-Request-ID".into(), conv_req.clone());
     h.insert("X-Trace-ID".into(), conv_req.clone());
+    // W3C traceparent：`00-<32位traceid>-<16位spanid>-01`。
+    h.insert(
+        "traceparent".into(),
+        format!("00-{}-{}-01", conv_req, msg[..16].to_string()),
+    );
     h.insert("X-B3-TraceId".into(), conv_req);
     h.insert("X-B3-SpanId".into(), msg[..16].to_string());
     h.insert("X-B3-Sampled".into(), "1".into());
