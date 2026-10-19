@@ -182,6 +182,13 @@ pub async fn oauth_poll(login_id: &str) -> Value {
     if !domain.is_empty() {
         headers.insert("X-Domain".to_string(), domain.to_string());
     }
+    // 国际版对齐官方客户端：带会话头族。
+    if variant == WbVariant::Ai {
+        let id = crate::modules::proxy::hex_id_public();
+        headers.insert("X-Conversation-ID".to_string(), id.clone());
+        headers.insert("X-Conversation-Request-ID".to_string(), id.clone());
+        headers.insert("X-Conversation-Message-ID".to_string(), id);
+    }
     let acc_resp = http_request(&account_url, "GET", None, Some(&headers)).await;
     let acc_data = acc_resp.get("data").cloned().unwrap_or_else(|| json!({}));
 

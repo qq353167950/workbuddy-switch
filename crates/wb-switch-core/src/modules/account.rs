@@ -501,6 +501,15 @@ pub fn build_auth_headers(account: &Value) -> HashMap<String, String> {
     if let Some(domain) = get_str(account, "domain") {
         headers.insert("X-Domain".to_string(), domain);
     }
+    // 国际版请求统一携带会话头族（对齐官方客户端；缺失时网关可能拒答）。
+    // 取值沿用 proxy::chat_headers 的口径：一次调用内 Request/Message 复用同一个
+    // 聚合主键，X-Conversation-ID 也取该主键（实测形态）。
+    if variant_of(account) == WbVariant::Ai {
+        let id = crate::modules::proxy::hex_id_public();
+        headers.insert("X-Conversation-ID".to_string(), id.clone());
+        headers.insert("X-Conversation-Request-ID".to_string(), id.clone());
+        headers.insert("X-Conversation-Message-ID".to_string(), id);
+    }
     headers
 }
 

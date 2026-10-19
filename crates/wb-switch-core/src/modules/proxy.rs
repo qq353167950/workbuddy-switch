@@ -559,12 +559,18 @@ fn upstream_endpoint(acc: &Value) -> &'static str {
     edition_of(acc).api_endpoint()
 }
 
+/// 32 位 hex 会话 id（时间戳异或固定盐）。
 fn hex_id() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     format!("{:032x}", nanos ^ 0x5eed_5eed_5eed_5eedu128)
+}
+
+/// 供非 proxy 模块（账号级请求头等）生成同口径会话 id 的公共入口。
+pub fn hex_id_public() -> String {
+    hex_id()
 }
 
 /// 组装出站头族（对齐官方桌面端，缺字段用 X-No-* 约定）。
