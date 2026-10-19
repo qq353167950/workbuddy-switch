@@ -572,9 +572,11 @@ fn hex_id() -> String {
 pub fn hex_id_public() -> String {
     hex_id()
 }
-
 /// 组装出站头族（对齐官方桌面端，缺字段用 X-No-* 约定）。
-fn chat_headers(acc: &Value) -> HashMap<String, String> {
+///
+/// `body` 用于派生「对话轮级」稳定会话键（见 `turn_stable_key`）：
+/// 同一轮内的重试 / 换号复用同一份会话 ID。非对话请求（如拉模型列表）传 `None`。
+fn chat_headers(acc: &Value, body: Option<&Value>) -> HashMap<String, String> {
     let mut h = HashMap::new();
     let uid = acc.get("uid").and_then(Value::as_str).unwrap_or("");
     let at = acc.get("access_token").and_then(Value::as_str).unwrap_or("");
@@ -634,27 +636,85 @@ fn chat_headers(acc: &Value) -> HashMap<String, String> {
     h.insert("X-Agent-Type".into(), "main".into());
     h.insert("X-IDE-Name".into(), "WorkBuddy".into());
     h.insert("X-IDE-Type".into(), "desktop".into());
+    h.insert("X-IDE-Version".into(), DEFAULT_CLIENT_VERSION.into());
     h.insert("X-Product".into(), "SaaS".into());
     h.insert("X-Private-Data".into(), "true".into());
 
     // 会话头族（一次对话轮复用同一个聚合主键）。
-    let conv_req = hex_id();
-    let msg = hex_id();
+    // 稳定性对齐官方：同一对话轮（最后一条 user 消息相同）内的重试/换号
+    // 复用同一份 ID，上游看到的是「一次对话的一次重试」而非 N 个并发会话。
+    let turn_key = turn_stable_key(body);
+    let conv_req = stable_or_hex(&turn_key, "req");
+    let msg = stable_or_hex(&turn_key, "msg");
     // 会话主键头必发，对齐官方客户端的带横线 UUID 形态。
     h.insert("X-Conversation-ID".into(), uuid::Uuid::new_v4().to_string());
     h.insert("X-Conversation-Request-ID".into(), conv_req.clone());
+    h.insert("X-Conversation-Message-ID".into(), msg.clone());
     h.insert("X-Request-ID".into(), msg.clone());
     h.insert("X-Root-Request-ID".into(), conv_req.clone());
     h.insert("X-Trace-ID".into(), conv_req.clone());
-    // W3C traceparent：`00-<32位traceid>-<16位spanid>-01`。
+    // span id 为 16 hex（8 字节），trace id 为 32 hex（16 字节）—— OTEL 规范。
+    let span = msg[..16].to_string();
+    // W3C traceparent：`00-<32位traceid>-<16位spanid>-01`。官方
+    // `injectOtelSpanHeaders` 每次模型请求注入整套（traceparent/b3/X-B3-*），
+    // 三者必须是同一份 trace/span，互相矛盾比不发更容易被识别。
     h.insert(
         "traceparent".into(),
-        format!("00-{}-{}-01", conv_req, msg[..16].to_string()),
+        format!("00-{}-{}-01", conv_req, span),
     );
+    // 单头 b3：`<traceId32>-<spanId16>-<1|0>`。
+    h.insert("b3".into(), format!("{}-{}-1", conv_req, span));
     h.insert("X-B3-TraceId".into(), conv_req);
-    h.insert("X-B3-SpanId".into(), msg[..16].to_string());
+    h.insert("X-B3-SpanId".into(), span);
     h.insert("X-B3-Sampled".into(), "1".into());
     h
+}
+
+/// 从请求体派生「对话轮级」稳定键：最后一条 user 消息的 sha256。
+///
+/// 同一轮内的所有重试 / 换号请求 body 的最后一条 user 消息恒定 → 同键 →
+/// 会话头族稳定。没有 user 消息时返回 None（退回随机 id）。
+fn turn_stable_key(body: Option<&Value>) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+
+    let msgs = body?.get("messages")?.as_array()?;
+    for m in msgs.iter().rev() {
+        if m.get("role").and_then(Value::as_str) == Some("user") {
+            let text = match m.get("content") {
+                Some(Value::String(s)) => s.clone(),
+                Some(Value::Array(parts)) => parts
+                    .iter()
+                    .filter_map(|p| p.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join(""),
+                _ => String::new(),
+            };
+            if text.is_empty() {
+                continue;
+            }
+            let mut hasher = Sha256::new();
+            hasher.update(text.as_bytes());
+            let digest = hasher.finalize();
+            let mut hex = String::with_capacity(64);
+            for b in digest {
+                write!(hex, "{b:02x}").ok();
+            }
+            return Some(hex);
+        }
+    }
+    None
+}
+
+/// 有稳定轮键时派生稳定的 32 位 hex id；否则退回随机。
+fn stable_or_hex(turn_key: &Option<String>, salt: &str) -> String {
+    match turn_key {
+        Some(key) => {
+            let start = if salt == "msg" { 32 } else { 0 };
+            key[start..start + 32].to_string()
+        }
+        None => hex_id(),
+    }
 }
 
 /// 上游网关只认少数几种内容块类型。客户端（zcode / Cursor / 各类 Agent）常发
@@ -1193,7 +1253,7 @@ async fn fetch_edition_models(
         .build()
         .map_err(|e| e.to_string())?;
     let mut req = client.get(&url);
-    for (k, v) in chat_headers(&acc) {
+    for (k, v) in chat_headers(&acc, None) {
         req = req.header(k, v);
     }
     let resp = req.send().await.map_err(|e| format!("请求上游失败：{e}"))?;
@@ -2011,13 +2071,14 @@ async fn chat_completions(
     );
 
     // 🔴 发请求 + 「渠道校验软拦截」重试，见 MAX_CHANNEL_RETRY。
-    // 重试时**重新生成**会话头族（chat_headers 里的 id 是每次调用现算的），
-    // 免得同一个 request id 被上游当成重复包直接判掉。
+    // 重试时**重新生成**会话头族，但同一轮的轮级键（最后一条 user 消息）不变，
+    // 所以 X-Conversation-Request-ID / X-B3 等在轮内保持稳定 —— 上游看到的是
+    // 「一次对话的一次重试」，而 X-Request-ID 等消息级 id 也不会被当成重复包。
     let mut channel_retry = 0usize;
     let mut transport_retry = 0usize;
     let resp = loop {
         let mut req = client.post(chat_url(&acc));
-        for (k, v) in chat_headers(&acc) {
+        for (k, v) in chat_headers(&acc, Some(&upstream_body)) {
             req = req.header(k, v);
         }
         let r = match req.json(&upstream_body).send().await {
